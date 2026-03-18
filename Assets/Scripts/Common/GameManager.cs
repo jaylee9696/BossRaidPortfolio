@@ -52,6 +52,7 @@ namespace Core.GameFlow
         private void Awake()
         {
             ResolveHealthReferences();
+            ResolveGameOverUiReferences();
             HideGameOverUI();
         }
 
@@ -162,6 +163,88 @@ namespace Core.GameFlow
                     _bossHealth = bossController.GetComponent<Health>();
                 }
             }
+        }
+
+        private void ResolveGameOverUiReferences()
+        {
+            if (_gameOverRoot != null && _resultLabel != null)
+            {
+                return;
+            }
+
+            Canvas[] canvases = FindObjectsByType<Canvas>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < canvases.Length; i++)
+            {
+                Canvas canvas = canvases[i];
+                if (canvas == null) continue;
+
+                Transform gameOverTransform = FindChildRecursive(canvas.transform, "GameOver_Panel");
+                if (gameOverTransform == null) continue;
+
+                if (_gameOverRoot == null)
+                {
+                    _gameOverRoot = gameOverTransform.gameObject;
+                }
+
+                if (_resultLabel == null)
+                {
+                    _resultLabel = FindGameResultLabel(gameOverTransform);
+                }
+
+                if (_gameOverRoot != null && _resultLabel != null)
+                {
+                    return;
+                }
+            }
+        }
+
+        private static Transform FindChildRecursive(Transform root, string expectedName)
+        {
+            if (root == null || string.IsNullOrWhiteSpace(expectedName))
+            {
+                return null;
+            }
+
+            string normalizedExpectedName = expectedName.Trim();
+            if (root.name.Trim() == normalizedExpectedName)
+            {
+                return root;
+            }
+
+            for (int i = 0; i < root.childCount; i++)
+            {
+                Transform child = root.GetChild(i);
+                Transform match = FindChildRecursive(child, normalizedExpectedName);
+                if (match != null)
+                {
+                    return match;
+                }
+            }
+
+            return null;
+        }
+
+        private static TMP_Text FindGameResultLabel(Transform gameOverRoot)
+        {
+            if (gameOverRoot == null)
+            {
+                return null;
+            }
+
+            TMP_Text[] labels = gameOverRoot.GetComponentsInChildren<TMP_Text>(true);
+            for (int i = 0; i < labels.Length; i++)
+            {
+                TMP_Text label = labels[i];
+                if (label == null) continue;
+
+                string normalizedName = label.name.Replace(" ", string.Empty);
+                if (normalizedName.Contains("GameResult"))
+                {
+                    return label;
+                }
+            }
+
+            return labels.Length > 0 ? labels[0] : null;
         }
 
         private void BindHealthEvents()

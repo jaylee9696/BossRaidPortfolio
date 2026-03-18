@@ -8,6 +8,20 @@
   - `docs/rollback_snapshots/2026-03-03_lunge_experiment_before_rollback_files/BossVisual.cs`
   - `docs/rollback_snapshots/2026-03-03_lunge_experiment_before_rollback_files/LungeAttackPattern.cs`
 
+## 2026-03-18 Gameplay Scene Promotion (before promotion)
+
+- Raw files:
+  - `docs/rollback_snapshots/2026-03-18_gameplay_scene_before_promotion/GamePlayScene.unity`
+  - `docs/rollback_snapshots/2026-03-18_gameplay_scene_before_promotion/GamePlayScene.unity.meta`
+- 용도: main gameplay scene promotion 직전 상태 복원용
+
+## 2026-03-18 Multiplayer Gameplay Scene Cleanup (before cleanup)
+
+- Raw files:
+  - `docs/rollback_snapshots/2026-03-18_multiplayer_gameplay_scene_before_cleanup/GamePlayScene.unity`
+  - `docs/rollback_snapshots/2026-03-18_multiplayer_gameplay_scene_before_cleanup/GamePlayScene.unity.meta`
+- 용도: duplicated multiplayer gameplay scene 제거 직전 상태 복원용
+
 ## Re-apply 방법
 
 ### 방법 1) patch 적용
