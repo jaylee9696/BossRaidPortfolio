@@ -388,9 +388,6 @@ classDiagram
 *   **Transition Router**: `Assets/Scripts/Common/SceneLoader.cs`
 *   **Loading Orchestrator**: `Assets/Scripts/Common/LoadingSceneController.cs`
 *   **Result & Restart**: `Assets/Scripts/Common/GameManager.cs`
-*   **Multiplayer Bootstrap Owner**: `Assets/Scripts/Multiplayer/Bootstrap/MultiplayerServicesBootstrap.cs`
-*   **Multiplayer Title Driver**: `Assets/Scripts/Multiplayer/UI/MultiplayerTitleSceneDriver.cs`
-*   **Multiplayer Scene Path Rule**: `Assets/Scripts/Multiplayer/SceneFlow/MultiplayerScenePaths.cs`
 
 ```mermaid
 classDiagram
@@ -400,6 +397,7 @@ classDiagram
         <<MonoBehaviour>>
         -GameSceneId _nextSceneId
         -float _inputLockDuration
+        -float _hostStartEnableDelay
         -bool _keepRuntimeRootInEditMode
         -TitlePanelState _currentPanelState
         -LobbyRole _currentLobbyRole
@@ -408,6 +406,7 @@ classDiagram
         +Update()
         +ShowPanel()
         +HandleSoloPlaySelected()
+        +ShowMultiplayerLobby(...)
     }
 
     class SceneLoader {
@@ -425,26 +424,6 @@ classDiagram
         +Update()
     }
 
-    class MultiplayerTitleSceneDriver {
-        <<MonoBehaviour>>
-        +HandleCreateRoomSelectedAsync()
-        +HandleJoinRoomSelectedAsync()
-        +HandleStartSelected()
-    }
-
-    class MultiplayerServicesBootstrap {
-        <<MonoBehaviour>>
-        +EnsureInitializedAsync()
-        +IsReady bool
-        +PlayerId string
-    }
-
-    class MultiplayerScenePaths {
-        <<Static>>
-        +IsMultiplayerTitleScene(string) bool
-        +GamePlayScenePath string
-    }
-
     class GameManager {
         <<MonoBehaviour>>
         +ResolveGameOver(GameResult)
@@ -455,14 +434,11 @@ classDiagram
     TitleSceneController ..> SceneLoader : requests transition
     SceneLoader --> LoadingSceneController : reserves target
     LoadingSceneController ..> SceneLoader : consumes target/completes transition
-    MultiplayerTitleSceneDriver ..> TitleSceneController : wraps duplicated title scene buttons
-    MultiplayerTitleSceneDriver ..> MultiplayerServicesBootstrap : ensures bootstrap
-    MultiplayerTitleSceneDriver ..> MultiplayerScenePaths : loads duplicated gameplay path
     GameManager ..> SceneLoader : shares game flow context
 ```
 
-멀티플레이 duplicated title scene(`Assets/Scenes/mutiplayer/TitleScene.unity`)에서는 `MultiplayerTitleSceneRuntimeInstaller`가 runtime에만 `MultiplayerTitleSceneDriver`를 붙인다.
-이 driver는 `Create Room` / `Join` 전에 `MultiplayerServicesBootstrap`을 호출하고, `Solo Play` / Host `Start`는 common scene name 대신 duplicated scene path로 우회한다.
+`main` 기준 `TitleSceneController`는 `MultiplayerModePanel / HostCreatePanel / ClientJoinPanel / LobbyPanel / WrongKeyPopup`을 local prototype UI로 유지한다.
+이 경로는 title flow/layout 검증과 menu state transition 확인용이며, real Relay/Lobby/NGO bootstrap은 `feature/multiplayer` 브랜치에서만 소유한다.
 
 ---
 
@@ -539,7 +515,7 @@ classDiagram
 | **Physics System** | `NonAlloc` 물리 판정(OverlapSphere) 및 최적화 완료. |
 | **Object Pooling** | `BossProjectilePool` 기반 투사체 재사용(Prewarm/Max/Expand) 구현 완료. |
 | **Third-Person Camera Module** | `Assets/Scripts/Camera/ThirdPersonCameraController.cs`를 메인 카메라 측 모듈로 분리해 카메라 설정을 카메라 오브젝트로 이동했다. |
-| **Package Baseline** | Unity 2022.3 기준으로 package manifest 정리 및 lock 재생성 경로 복구 (`URP/VFX 14.0.12`, `TMP 추가`, Unity 6 전용 의존성 제거). |
+| **Package Baseline** | Unity 2022.3 기준 shared `main` baseline은 `URP/VFX 14.0.12`, `TMP`, `2D Sprite`, `FBX`만 유지하고, UGS/NGO/Relay/Lobby package set은 `feature/multiplayer` 브랜치에서만 소유한다. |
 | **External Asset Distribution Policy** | 런타임 실사용 에셋만 Git/LFS로 선별 추적한다. 기준은 GUID 의존성 폐쇄(씬/프리팹/설정의 직접+간접 참조)이며, `Assets/TextMesh Pro` 루트와 미사용 서드파티 리소스는 제외한다. Unity 참조 안정성을 위해 에셋과 `.meta`를 쌍으로 버전관리한다. |
 
 ### 4.2. Player System
@@ -569,18 +545,22 @@ classDiagram
 ### 4.4. User Interface (UI)
 | Component | Note |
 | --- | --- |
-| **UI System** | 전투 HUD 배치 + `CombatHUDController` 연동 완료. `Health.OnDamageTaken/OnDeath` 이벤트로 플레이어/보스 HP Fill을 즉시 갱신하고, `DamageCaster.OnAttackWindowResolved` 결과를 `HIT + 피해량` 고정형 피드백(스케일 강조 후 짧은 페이드 아웃)으로 표시한다. 이름 라벨(`Player`, `Dragon`) 및 `ShowHud(bool)` 기반 전체 표시 제어를 포함한다. shared `Canvas.prefab`의 `PartnerHUD_Panel`은 기본적으로 숨기고, `PlayerController.InitializeCombatHUD()`가 `MultiplayerSessionService.HasActiveSession`이 true일 때만 `SetPartnerHudVisible(true)`로 연다. combo UI(`Text_Combo`)도 기본 hidden 상태를 유지하며, `AttackState.StartComboStep()`은 `PlayerController.SetPendingComboHudStep(step)`로 현재 단계만 준비하고, 실제 open은 `DamageCaster.OnAttackHitConfirmed` -> `PlayerController.ShowComboHud(step)` -> `CombatHUDController.ShowCombo(step)` 경로에서만 수행한다. `AttackState.Exit()` / `InitializeCombatHUD()` / `ShowHud(false)`는 `HideCombo()`로 stale combo UI를 정리한다. duplicated multiplayer title scene의 `Solo Play`도 duplicated multiplayer gameplay scene path로 들어갈 수 있으므로, partner HUD 표시 게이트는 scene path가 아니라 real session state를 truth source로 사용한다. current multiplayer gameplay scene(`Assets/Scenes/mutiplayer/GamePlayScene.unity`)은 promoted main gameplay scene content를 duplicate로 유지하며, `GameManager`는 scene binding이 비어 있어도 `GameOver_Panel` / `GameResult` text를 runtime에서 재탐색한다. |
-| **Title Multiplayer UI** | `TitleSceneController`가 기존 캔버스 위에 `TitleMainPanel / MultiplayerModePanel / HostCreatePanel / ClientJoinPanel / LobbyPanel / WrongKeyPopup`을 구성한다. main title scene의 UI 레이아웃은 그대로 두고, duplicated multiplayer title scene(`Assets/Scenes/mutiplayer/TitleScene.unity`)에서는 `MultiplayerTitleSceneRuntimeInstaller` + `MultiplayerTitleSceneDriver`가 runtime에만 붙는다. 이 driver는 Host `Create Room`과 Client `Join`을 모두 `MultiplayerSessionService`로 넘기고, service는 먼저 `MultiplayerServicesBootstrap` ready를 보장한 뒤 Host는 `Relay allocation -> join code -> Lobby create(metadata S1) -> NGO Host start`, Client는 `join code normalize -> Lobby query(S1) -> Lobby join -> Relay join -> NGO Client start`를 수행한다. 성공 시 `LobbyPanel`에는 real room title, real join code, real player count가 바인딩되고, wrong key는 `WrongKeyPopup`으로 되돌리며 그 외 실패와 `Cancel`은 strict cleanup 후 title로 돌아간다. duplicated multiplayer title scene manual Host smoke test에서는 `PlayerId ready`, `Host session started`, `Lobby heartbeat sent`, `Deleting lobby`, `Cleanup complete`까지 실제 로그로 확인됐다. `2/2` stable `Start` unlock 규칙은 아직 후속 작업이다. |
+| **UI System** | 전투 HUD 배치 + `CombatHUDController` 연동 완료. `Health.OnDamageTaken/OnDeath` 이벤트로 플레이어/보스 HP Fill을 즉시 갱신하고, `DamageCaster.OnAttackWindowResolved` 결과를 `HIT + 피해량` 고정형 피드백(스케일 강조 후 짧은 페이드 아웃)으로 표시한다. 이름 라벨(`Player`, `Dragon`) 및 `ShowHud(bool)` 기반 전체 표시 제어를 포함한다. shared `Canvas.prefab`의 `PartnerHUD_Panel`은 기본적으로 숨기고, shared `main`의 `PlayerController.InitializeCombatHUD()`는 항상 `SetPartnerHudVisible(false)`를 호출해 partner slot을 reserve-only 상태로 유지한다. combo UI(`Text_Combo`)도 기본 hidden 상태를 유지하며, `AttackState.StartComboStep()`은 `PlayerController.SetPendingComboHudStep(step)`로 현재 단계만 준비하고, 실제 open은 `DamageCaster.OnAttackHitConfirmed` -> `PlayerController.ShowComboHud(step)` -> `CombatHUDController.ShowCombo(step)` 경로에서만 수행한다. `AttackState.Exit()` / `InitializeCombatHUD()` / `ShowHud(false)`는 `HideCombo()`로 stale combo UI를 정리한다. `GameManager`는 scene binding이 비어 있어도 `GameOver_Panel` / `GameResult` text를 runtime에서 재탐색한다. |
+| **Title Prototype UI** | `TitleSceneController`가 기존 캔버스 위에 `TitleMainPanel / MultiplayerModePanel / HostCreatePanel / ClientJoinPanel / LobbyPanel / WrongKeyPopup`을 구성한다. `main`에서는 이 패널들이 local prototype flow로만 동작하며, Host path는 auto room title + fake join code + start unlock timer를 사용한다. real bootstrap/session/network transport는 이 브랜치에 두지 않고 `feature/multiplayer`에서만 유지한다. |
 
 ### 4.5. Game Logic & Flow
 | Component | Note |
 | --- | --- |
-| **Game Loop** | `TitleSceneController`가 `Solo Play / Multi Play` 버튼 기반 시작 흐름을 관리하고, main scene 기준으로는 `SceneLoader` + `LoadingSceneController` 경유 전투 진입/`GameManager` 결과 처리까지 연결한다. duplicated multiplayer title scene에서는 `MultiplayerScenePaths` 기반 path load를 사용해 `Assets/Scenes/mutiplayer/GamePlayScene.unity`로 직접 이동한다. Host create, Client join, lobby cancel/back까지는 real session flow가 연결됐고, 다음 단계는 lobby active 안정화와 gameplay start consensus다. |
+| **Game Loop** | `TitleSceneController`가 `Solo Play / Multi Play` 버튼 기반 시작 흐름을 관리하고, `SceneLoader` + `LoadingSceneController` 경유 전투 진입/`GameManager` 결과 처리까지 연결한다. `Multi Play` path는 shared `main`에서 local UI prototype으로만 남아 있으며, host/client panel state와 wrong-key popup UX를 검증할 수 있다. real multiplayer runtime scene routing과 service bootstrap은 `feature/multiplayer`가 소유한다. |
 
-### 4.6. Network Architecture
+### 4.6. Branch Isolation Policy
 | Component | Note |
 | --- | --- |
-| **Netcode Prep** | `Session 1 - Package Baseline`, `Session 2 - Services Bootstrap`, `Session 3 - Host Create`, `Session 4 - Client Join`까지 구현됐다. `MultiplayerServicesBootstrap`은 `UnityServices.InitializeAsync()` + anonymous sign-in + `PlayerId` 확보를 one-time init으로 묶고, `MultiplayerRuntimeRoot`는 `NetworkManager` + `UnityTransport` singleton owner를 맡는다. `MultiplayerSessionService`는 Host create 시 `Relay allocation -> join code -> Lobby create(metadata S1) -> UnityTransport host relay configure -> NGO StartHost()`, Client join 시 `join code normalize -> QueryLobbiesAsync(S1) -> JoinLobbyByIdAsync -> Relay JoinAllocationAsync -> UnityTransport client relay configure -> NGO StartClient()` 순서를 실행하며, wrong-key/fatal failure 구분, host heartbeat, strict shutdown, 그리고 Wire package가 있을 때만 활성화되는 optional lobby event subscription까지 관리한다. Session 3 Host create / cancel은 duplicated multiplayer title scene manual smoke test로 실제 검증됐고, 다음 단계는 Lobby active 안정화와 `Start` unlock rule이다. |
+| **Shared Main Baseline** | `main`은 UI/art/solo-safe shared branch다. 이 baseline은 `Assets/Scripts/Multiplayer/**`, duplicated multiplayer scenes, `Unity Services` / `Relay` / `Lobby` / `Netcode` package set 없이도 compile/run 가능해야 한다. shared art import에 필요한 `2D Sprite`, `FBX` package add-on은 허용한다. |
+| **Multiplayer Ownership** | real multiplayer runtime, duplicated scenes, network prefabs, UGS/NGO package set, partner HUD activation은 `feature/multiplayer` 브랜치가 단일 owner다. shared UI/art 변경은 먼저 `main`에 합치고, `feature/multiplayer`가 이후 `main`을 merge/pull하는 흐름을 기본값으로 한다. |
+| **Solo Branch Base** | `feature/solo-play`는 latest shared `main`에서 분기하는 safe gameplay branch다. solo-specific gameplay는 여기서 진행하되, shared UI/art asset은 계속 `main`을 integration point로 사용한다. |
+
+참조 로그: `docs/Progress_Log/2026-03-24.md`
 
 ---
 

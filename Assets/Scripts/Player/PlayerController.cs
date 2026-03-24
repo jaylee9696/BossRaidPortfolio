@@ -578,18 +578,8 @@ public class PlayerController : MonoBehaviour, IDashContext, IAttackable, IBossA
         _combatHUD.Initialize(_health, _bossHealthForHUD);
         _combatHUD.SetPlayerName(_playerDisplayName);
         _combatHUD.SetBossName(_bossDisplayName);
-        _combatHUD.SetPartnerHudVisible(ShouldShowPartnerHud());
+        _combatHUD.SetPartnerHudVisible(false);
         HideComboHud();
-    }
-
-    private static bool ShouldShowPartnerHud()
-    {
-        if (!Core.Multiplayer.MultiplayerSessionService.HasInstance)
-        {
-            return false;
-        }
-
-        return Core.Multiplayer.MultiplayerSessionService.Instance.HasActiveSession;
     }
 
     // Animation Event Callbacks

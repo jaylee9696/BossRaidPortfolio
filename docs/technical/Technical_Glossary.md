@@ -10,20 +10,16 @@
 * **ThirdPersonCameraController**: 메인 카메라에 부착되는 3인칭 카메라 전용 컨트롤러(`Assets/Scripts/Camera/ThirdPersonCameraController.cs`). 카메라 추적/회전 설정을 카메라 오브젝트에서 직접 관리한다.
 * **BossVisual**: 보스(`The Cube`)의 애니메이션, UI, 이펙트 등 시각적 요소를 전담하는 컴포넌트. `BossController`의 로직과 분리되어 있다.
 
-## 2. Input & Network
+## 2. Input & Branch Policy
 
 * **Input Packet (PlayerInputPacket)**: 매 프레임 발생하는 입력 데이터를 담은 구조체. `moveDir`, `lookYaw`, `lookPitch`, `buttons`를 포함한다.
 * **Input Provider**: 입력을 생성하는 주체. `LocalInputProvider`(키보드/마우스)와 추후 구현될 `NetworkInputProvider`(RPC/데이터 패킷)로 나뉜다.
-* **Cloud Project Link (클라우드 프로젝트 링크)**: Unity Editor 프로젝트가 Unity Dashboard 프로젝트와 연결된 상태. `ProjectSettings/ProjectSettings.asset`의 `cloudProjectId`가 채워져 있어야 `UnityServices.InitializeAsync()` 기반 UGS bootstrap을 시작할 수 있다.
 * **Bit-Packing (비트 패킹)**: 여러 개의 `bool` 버튼 상태를 1바이트(`byte`) 데이터로 묶어 네트워크 전송 효율을 극대화하는 기법.
 * **Input Flag**: 비트 패킹 시 각 버튼의 자릿수를 지정하는 `Enum` (예: Dash, Attack).
-* **Package Baseline Session (패키지 준비 세션)**: 멀티플레이 구현의 첫 단계. `com.unity.services.authentication`, `com.unity.services.lobby`, `com.unity.services.relay`, `com.unity.netcode.gameobjects`, `com.unity.transport`를 project baseline에 맞게 정리하고, Unity Package Manager resolve + compile check까지 끝내서 이후 bootstrap/runtime 코드를 올릴 수 있는 기준선을 만드는 세션이다.
-* **Resolver Pulled Dependency (리졸버 전이 의존성)**: manifest에 직접 적지 않아도 Package Manager가 상위 패키지 의존성 그래프를 따라 자동으로 lock에 추가하는 패키지. 현재 멀티플레이 baseline에서는 `com.unity.transport`, `com.unity.services.authentication`, `com.unity.services.core`가 이 방식으로 확정됐다.
-* **Services Bootstrap Session (UGS bootstrap 세션)**: `MultiplayerServicesBootstrap`가 `UnityServices.InitializeAsync()`와 anonymous sign-in을 한 번만 수행해 `PlayerId`를 확보하는 세션. Host create / Client join 직전에 실행되며, 실패 시 다음 session으로 넘어가지 않는다.
-* **Bootstrap Ready State (bootstrap ready 상태)**: `MultiplayerServicesBootstrap.IsReady == true`와 `PlayerId`가 확보된 상태. 이후 Lobby/Relay/NGO service 호출을 시작해도 되는 기준점이다. 현재 duplicated multiplayer title scene manual smoke check에서 이 상태 진입이 확인됐다.
-* **Host Create Session (Host create 세션)**: Host가 real Relay allocation을 만들고 join code를 받은 뒤, 같은 코드를 Lobby metadata(`S1`)에 저장하고 NGO Host를 시작하는 세션. 현재 duplicated multiplayer title scene에서는 이 경로가 `MultiplayerSessionService.CreateHostSessionAsync()`로 연결됐고, manual Host smoke test에서 join code 발급 / lobby create / heartbeat / cancel cleanup까지 확인됐다.
-* **Client Join Session (Client join 세션)**: Client가 raw join code를 `trim + uppercase`로 정리한 뒤 `S1` indexed Lobby query로 room을 찾고, Lobby join -> Relay join -> NGO Client start를 수행하는 세션. wrong key 계열 실패는 popup으로 묶고, partial state는 strict cleanup으로 정리한다.
-* **Lobby Events Optional Path (Lobby Events 선택 경로)**: Lobby 실시간 구독은 `UGS_BETA_LOBBY_EVENTS`와 `UGS_LOBBY_EVENTS`가 함께 활성화될 때만 열리는 선택 경로다. 현재 프로젝트는 Wire package 없이도 compile-safe해야 하므로, `MultiplayerSessionService`가 이 capability를 조건부로만 사용한다.
+* **Main-Safe Shared Branch (main-safe shared branch)**: `main`이 UI/art/solo-safe shared branch로 유지되는 운영 규칙. 이 브랜치는 `Assets/Scripts/Multiplayer/**`, duplicated multiplayer scenes, UGS/NGO package set 없이도 compile/run 가능해야 한다.
+* **Multiplayer Branch Ownership (멀티플레이 브랜치 소유권)**: real multiplayer runtime, duplicated scenes, partner HUD activation, Relay/Lobby/NGO package set을 `feature/multiplayer`가 단일 owner로 갖는 규칙.
+* **Title Multiplayer Prototype (타이틀 멀티플레이 프로토타입)**: `TitleSceneController`가 `main`에서도 `Host/Client/Lobby/WrongKeyPopup` panel flow를 local prototype UI로 유지하는 상태. layout/UX/state transition 확인용이며, real service bootstrap은 포함하지 않는다.
+* **Shared Art Package Add-on (shared art package add-on)**: shared `main`이 유지할 수 있는 art-side package 확장. 현재 허용 범위는 `com.unity.2d.sprite`, `com.unity.formats.fbx`이며, network/service package set은 여기에 포함하지 않는다.
 
 ## 3. Architecture & Logic
 
@@ -50,26 +46,22 @@
 * **Visual Root Merge (시각 루트 병합)**: gameplay scene의 로직 루트는 유지한 채, 다른 scene에서 준비한 `Canvas` / `Background` / `Tile` 같은 시각 전용 root만 옮겨 붙이는 병합 방식. 이번 gameplay scene 정리에서는 검증 후 main gameplay scene으로 승격했고, multiplayer gameplay scene duplicate의 source로도 재사용됐다.
 * **HP Fill 정규화 업데이트**: `HealthRatio`를 `Image.fillAmount`로 반영해 체력 UI를 갱신하는 방식. 수치 텍스트 갱신 없이도 이벤트 기반으로 즉시 동기화할 수 있다.
 * **HUD 가시성 토글**: `CombatHUDController.ShowHud(bool)`로 플레이어/보스 체력 UI와 이름 라벨, 데미지 피드백 표시를 일괄 On/Off 하는 제어 패턴.
-* **Partner HUD Visibility Gate (파트너 HUD 표시 게이트)**: `CombatHUDController`가 `PartnerHUD_Panel`을 기본 hidden으로 유지하고, `PlayerController.InitializeCombatHUD()`가 `MultiplayerSessionService.HasActiveSession`이 true일 때만 이를 표시하는 규칙. duplicated multiplayer title scene의 `Solo Play`도 duplicated multiplayer gameplay scene path를 사용할 수 있으므로 scene path는 truth source로 쓰지 않는다.
+* **Partner HUD Visibility Gate (파트너 HUD 표시 게이트)**: `CombatHUDController`가 `PartnerHUD_Panel`을 기본 hidden으로 유지하는 규칙. shared `main`에서는 `PlayerController.InitializeCombatHUD()`가 항상 `SetPartnerHudVisible(false)`를 호출하고, real partner binding/activation은 `feature/multiplayer`에서만 연다.
 * **Combo UI Visibility Gate (콤보 UI 표시 게이트)**: `CombatHUDController`가 `Text_Combo` root를 기본 hidden으로 유지하고, `AttackState.StartComboStep()`은 `PlayerController.SetPendingComboHudStep(step)`로 현재 step만 준비한다. 실제 combo UI open은 `DamageCaster.OnAttackHitConfirmed` -> `PlayerController.ShowComboHud(step)` -> `CombatHUDController.ShowCombo(step)` 경로에서만 수행되며, miss 공격은 UI를 열지 않는다. `AttackState.Exit()`, `PlayerController.HandleDeath()`, `CombatHUDController.ShowHud(false)`는 `HideCombo()`로 stale combo UI를 정리한다.
-* **Title Scene**: 게임 시작 시점 전용 씬. 현재 `TitleSceneController`가 버튼 기반 `Solo Play / Multi Play` 흐름과 Host/Client/Lobby 패널 전환을 관리하며, `TitleRuntimeRoot`를 Edit Mode에서도 재사용할 수 있도록 유지한다.
-* **Multiplayer Scene Isolation (멀티플레이 씬 격리)**: 새 멀티플레이 코드를 main scene asset에 바로 섞지 않고 `Assets/Scenes/mutiplayer/...` duplicated scene 경로에서 먼저 동작시키는 운영 방식. 현재 title/loading/gameplay 모두 multiplayer folder 안에서 유지한다.
+* **Title Scene**: 게임 시작 시점 전용 씬. 현재 `TitleSceneController`가 버튼 기반 `Solo Play / Multi Play` 흐름과 local Host/Client/Lobby prototype panel 전환을 관리하며, `TitleRuntimeRoot`를 Edit Mode에서도 재사용할 수 있도록 유지한다.
+* **Multiplayer Branch Isolation (멀티플레이 브랜치 격리)**: real multiplayer 코드를 shared `main`에 남기지 않고 `feature/multiplayer` 브랜치에서만 유지하는 운영 방식. shared `main`은 UI/art/solo-safe baseline을 우선한다.
 * **Scene GUID-Preserving Promotion (씬 GUID 보존 승격)**: Unity scene를 최신 duplicate로 교체할 때 target `.meta` GUID는 유지하고 `.unity` 본문만 교체하는 승격 방식. build settings와 scene asset reference를 흔들지 않으면서 latest scene content를 main path로 올릴 때 사용한다. 2026-03-18에는 latest temporary gameplay scene content를 `Assets/Scenes/GamePlayScene.unity`로 올릴 때 이 방식을 사용했다.
 * **Loading Scene**: 씬 전환 중 비동기 로드를 담당하는 중간 씬. `SceneLoader`가 목적지 씬을 예약하고 `LoadingSceneController`가 진행률 UI와 활성화 타이밍을 제어한다.
 * **Input Lock Duration (입력 잠금 시간)**: 타이틀 진입 직후의 잔존 키 입력으로 즉시 전환되는 문제를 막기 위한 짧은 대기 구간. 현재 `TitleSceneController`의 `_inputLockDuration`으로 제어한다.
 * **TitleMainPanel**: `TitleScene`의 첫 진입 패널. `Solo Play`, `Multi Play` 두 버튼만 노출한다.
 * **MultiplayerModePanel**: 멀티플레이 진입 후 `Host`, `Client`, `Back to Title` 분기를 고르는 패널.
 * **HostCreatePanel**: Host가 optional room title을 입력하고 `Create Room`을 누르는 패널. 제목이 비면 `join here 0000` 형식 auto title을 생성한다.
-* **ClientJoinPanel**: Client가 6자리 join code를 입력하는 패널. duplicated multiplayer title scene에서는 `MultiplayerTitleSceneDriver`가 이 입력을 `MultiplayerSessionService.JoinClientSessionAsync()`로 전달하고, wrong key 계열 실패 시 같은 panel 위에 popup을 띄운다.
-* **LobbyPanel**: Host/Client가 공통으로 보는 멀티플레이 대기 패널. room title, join code, connected players, waiting text, host-only `Start`를 표시한다.
+* **ClientJoinPanel**: Client가 6자리 join code를 입력하는 패널. shared `main`에서는 format validation + wrong key popup UX를 확인하는 local prototype step으로 사용한다.
+* **LobbyPanel**: Host/Client가 공통으로 보는 멀티플레이 대기 패널. shared `main`에서는 room title, join code, connected players, waiting text, host-only `Start`를 local prototype state로만 표시한다.
 * **WrongKeyPopup**: 잘못된 join code를 같은 UX로 묶어 보여주는 overlay popup. 기본 문구는 `Wrong key. Please type again.` 이다.
 * **Edit-Mode Title Preview (에디트 모드 타이틀 프리뷰)**: `TitleSceneController`가 `ExecuteAlways` 경로에서 `TitleRuntimeRoot`를 생성/재사용해, Play Mode에 들어가지 않아도 `TitleScene` 패널 배치와 앵커를 Unity Editor에서 바로 조정할 수 있게 하는 처리.
 * **Auto Room Title**: Host room title이 비어 있을 때 사용하는 기본 제목 규칙. 형식은 `join here 0000`이며 뒤 4자리는 랜덤 숫자다.
 * **Start Unlock Gate**: Host `Start` 버튼이 `2/2 connected` 직후 즉시 열리지 않고 안정 대기 후 열리도록 하는 게이트. 현재 UI 프로토타입에서는 2초 타이머로 표현한다.
-* **MultiplayerTitleSceneDriver**: duplicated multiplayer title scene에서만 runtime에 붙는 wrapper 컴포넌트. Host `Create Room`, Client `Join`, lobby `Cancel/Back`를 `MultiplayerSessionService`로 라우팅하고, 진행 중 버튼 잠금 / `Connecting...` 표시 / wrong key popup 유지 / fatal fail title 복귀를 담당한다. 또한 `Solo Play` / Host `Start`를 duplicated multiplayer gameplay scene path로 우회한다.
-* **MultiplayerRuntimeRoot**: `DontDestroyOnLoad` singleton으로 유지되는 멀티플레이 runtime root. `NetworkManager`와 `UnityTransport`를 같은 GameObject에 붙이고, session service가 NGO/UTP를 재사용할 수 있게 한다.
-* **MultiplayerSessionService**: 멀티플레이 session owner. Host create / Client join / strict cleanup 동안 Relay, Lobby, NGO 상태를 한 곳에서 관리하고, UI에는 snapshot event로 room title / join code / player count / status text를 전달한다. Session 4 기준으로 Client join은 `QueryLobbiesAsync(S1)` 기반 query-first path와 wrong-key/fatal failure 구분까지 포함한다.
-* **Strict Close**: 멀티플레이 흐름 중 create/join/start 실패 또는 `Back/Cancel` 발생 시 세션을 닫고 `TitleScene`으로 돌아가는 정리 규칙. 현재 Host create / Client join / local cancel-back path에서는 lobby delete(or remove player), heartbeat stop, NGO shutdown, cached state clear까지 실제 서비스 정리가 구현됐다. manual Host smoke test에서도 `Deleting lobby` -> `Cleanup complete` 순서가 확인됐다.
 * **SimultaneousDeathTest (동시 사망 테스트 컴포넌트)**: `GamePlayScene_TestResult`에서 동일 프레임 사망을 재현하기 위해, `K` 입력 시 플레이어/보스 `Health.TakeDamage`를 같은 프레임에 호출하는 테스트 스크립트(`Assets/Scripts/Test/SimultaneousDeathTest.cs`).
 * **동시 사망 판정 우선순위 (GameManager)**: `GameManager.LateUpdate()`가 `_bossDead`를 먼저 검사해 결과를 확정하는 규칙. 플레이어와 보스가 동시에 사망하면 `Victory`를 반환한다.
 * **GameOver UI Auto Resolve**: `GameManager`가 `_gameOverRoot` / `_resultLabel` scene binding이 비어 있을 때 `Canvas` 계층에서 `GameOver_Panel`과 `GameResult` TMP를 다시 찾는 fallback 절차. scene-local fileID에 덜 의존하도록 만든다.
